@@ -68,14 +68,10 @@ void CentralizedTracker::step(double t, const std::vector<Sensor>& sensors, cons
       n.kf.P.topLeftCorner<3, 3>() = ms[j].R;
     } else {
       // Initialize the new track's state and covariance from the RangeAzEl measurement
-      const double r = ms[j].z(0), az = ms[j].z(1), el = ms[j].z(2);
-      const double ce = std::cos(el), se = std::sin(el), ca = std::cos(az), sa = std::sin(az);
-      Vec3 p = ms[j].pose.position + Vec3(r*ce*ca, r*ce*sa, r*se);
+      const Vec3 z_world = s.model().Meas2World(ms[j].pose.position, ms[j].pose.orientation, ms[j].z);
+      n.kf.x.head<3>() = z_world;
 
-      Mat3 J;  // d(pos)/d(r, az, el)
-      J << ce*ca, -r*ce*sa, -r*se*ca,
-          ce*sa,  r*ce*ca, -r*se*sa,
-          se,     0.0,      r*ce;
+      Mat3 J = s.model().Meas2WorldJacobian(ms[j].pose.position, ms[j].pose.orientation, ms[j].z);
       Mat3 Rpos = J * ms[j].R * J.transpose();
 
       n.kf.P.topLeftCorner<3, 3>() = Rpos;

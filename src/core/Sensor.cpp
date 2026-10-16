@@ -46,8 +46,10 @@ std::vector<Measurement> Sensor::observe(double t, const std::vector<Target>& ta
     const double r = cfg_.min_range + (cfg_.max_range - cfg_.min_range) * u01(rng);
     const Vec3 dir_local(ct, st * std::cos(ph), st * std::sin(ph));
     Measurement m;
-    m.sensor = cfg_.id; m.time = t; m.R = R; m.is_clutter = true;
-    m.z = cfg_.pose.position + cfg_.pose.orientation * (r * dir_local);
+    m.sensor = cfg_.id; m.type = cfg_.measType; m.time = t; m.R = R; m.truth_id = 0 ;
+    m.is_clutter = true; m.pose = cfg_.pose;  // sensor pose at measurement time
+    const Vec3 z_world = cfg_.pose.position + cfg_.pose.orientation * (r * dir_local);
+    m.z = model_.World2Meas(cfg_.pose.position, cfg_.pose.orientation, z_world);
     out.push_back(m);
   }
   return out;
