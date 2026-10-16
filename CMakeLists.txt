@@ -1,0 +1,69 @@
+cmake_minimum_required(VERSION 3.16)
+project(sfsim CXX)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+  set(CMAKE_BUILD_TYPE Release)
+endif()
+
+include(FetchContent)
+
+find_package(Eigen3 3.3 QUIET NO_MODULE)
+if(NOT Eigen3_FOUND)
+  FetchContent_Declare(eigen
+    URL https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz)
+  set(EIGEN_BUILD_DOC OFF CACHE BOOL "" FORCE)
+  set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
+  FetchContent_MakeAvailable(eigen)
+endif()
+
+# Layers A-C: no rendering dependencies, so it stays testable and headless-capable
+add_library(sfsim_core
+  src/core/Target.cpp
+  src/core/Sensor.cpp
+  src/core/MeasurementModel.cpp
+  src/tracking/KalmanFilter.cpp
+  src/tracking/ExtendedKalmanFilter.cpp
+  src/tracking/CentralizedTracker.cpp
+  src/tracking/Decentralized.cpp
+  src/sim/Simulation.cpp)
+target_include_directories(sfsim_core PUBLIC src)
+target_link_libraries(sfsim_core PUBLIC Eigen3::Eigen)
+
+add_executable(sfsim_headless app/main_headless.cpp)
+target_link_libraries(sfsim_headless PRIVATE sfsim_core)
+
+# Layer D: SDL2 + OpenGL3 + Dear ImGui front end
+option(SFSIM_GUI "Build the SDL2 + Dear ImGui front end" ON)
+if(SFSIM_GUI)
+  find_package(SDL2 REQUIRED)
+  find_package(OpenGL REQUIRED)
+
+  FetchContent_Declare(imgui
+    GIT_REPOSITORY https://github.com/ocornut/imgui.git
+    GIT_TAG docking
+    GIT_SHALLOW TRUE)
+  FetchContent_MakeAvailable(imgui)   # imgui has no CMakeLists; this just downloads it
+
+  add_library(imgui STATIC
+    ${imgui_SOURCE_DIR}/imgui.cpp
+    ${imgui_SOURCE_DIR}/imgui_draw.cpp
+    ${imgui_SOURCE_DIR}/imgui_tables.cpp
+    ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_sdl2.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp)
+  target_include_directories(imgui PUBLIC ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends)
+  if(TARGET SDL2::SDL2)
+    target_link_libraries(imgui PUBLIC SDL2::SDL2)
+  else()
+    target_include_directories(imgui PUBLIC ${SDL2_INCLUDE_DIRS})
+    target_link_libraries(imgui PUBLIC ${SDL2_LIBRARIES})
+  endif()
+  target_link_libraries(imgui PUBLIC OpenGL::GL ${CMAKE_DL_LIBS})
+
+  add_executable(sfsim_gui app/main_gui.cpp)
+  target_link_libraries(sfsim_gui PRIVATE sfsim_core imgui)
+  if(TARGET SDL2::SDL2main)
+    target_link_libraries(sfsim_gui PRIVATE SDL2::SDL2main)
+  endif()
+endif()
