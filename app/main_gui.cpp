@@ -1,5 +1,5 @@
 // SDL2 + OpenGL3 + Dear ImGui front end. Reads Simulation::snapshot() only;
-// the only writes into the sim are the live sensor-config sliders.
+// the only writes into the sim are the live sensor-config and tracker-param sliders.
 #define GL_SILENCE_DEPRECATION
 #define _USE_MATH_DEFINES
 #include <SDL.h>
@@ -11,6 +11,7 @@
 #include <deque>
 #include <unordered_map>
 #include <unordered_set>
+#include <map>
 
 #include "imgui.h"
 #include "imgui_impl_opengl3.h"
@@ -19,6 +20,7 @@
 #include "sim/Simulation.hpp"
 #include "tracking/CentralizedTracker.hpp"
 #include "view/Viewport.hpp"
+#include "core/maths.hpp"
 
 using namespace sfsim;
 
@@ -44,19 +46,19 @@ static Simulation makeScenario(uint64_t seed) {
     sc.id = id; sc.pose.position = pos;
     sc.measType = type;
     sc.pose.orientation = Eigen::Quaterniond(Eigen::AngleAxisd(yaw, Vec3::UnitZ()));
-    sc.fov_half_angle = 0.95; sc.max_range = 6500; sc.update_rate_hz = rate; sc.sigma = Vec3(1, 0.01, 0.01);
+    sc.fov_half_angle = 0.95; sc.max_range = 7500; sc.update_rate_hz = rate; sc.sigma = Vec3(1, 0.01, 0.01);
     sim.addSensor(sc);
   };
-  addSensor(0, MeasType::RangeAzEl, Vec3(-3000, -2000, 30), 0.6, 2.0);
-  addSensor(1, MeasType::RangeAzEl, Vec3(3000, -2000, 30), M_PI - 0.6, 2.0);
-  addSensor(2, MeasType::RangeAzEl, Vec3(0, 3500, 30), -M_PI / 2, 1.0);
+  addSensor(0, MeasType::RangeAzEl, Vec3(-3000, -2000, 30), 0.6, 5.0);
+  addSensor(1, MeasType::RangeAzEl, Vec3(3000, -2000, 30), M_PI - 0.6, 5.0);
+  addSensor(2, MeasType::RangeAzEl, Vec3(0, 3500, 30), -M_PI / 2, 5.0);
 
   addTarget(sim, 1, Vec3(-1500, -500, 0), Vec3(70, 15, 0), std::make_unique<ConstantVelocity>());
   addTarget(sim, 2, Vec3(1500, 1500, 0), Vec3(-60, -10, 0), std::make_unique<CoordinatedTurn>(0.04));
-  addTarget(sim, 3, Vec3(0, -1000, 0), Vec3(0, 40, 5), std::make_unique<CoordinatedTurn>(-0.03));
+  addTarget(sim, 3, Vec3(0, -1000, 0), Vec3(0, 40, 0), std::make_unique<CoordinatedTurn>(-0.03));
   addTarget(sim, 4, Vec3(-2500, 2000, 0), Vec3(60, -20, 0), std::make_unique<ConstantVelocity>(), 20.0, 90.0);
 
-  sim.setFusion(std::make_unique<CentralizedTracker>());
+  sim.setFusion(std::make_unique<CentralizedTracker>(sim.trackerParams()));  // tracker reads the sim-owned params by reference
   return sim;
 }
 
@@ -71,6 +73,13 @@ struct App {
   float speed = 1.0f;
   double acc = 0;
 
+  static constexpr double kErrHistory = 300.0;  // seconds of error history kept
+  static constexpr double kAssocGate  = 1000.0; // m: no confirmed track this close => target counts as untracked
+  struct ErrSample { double t; double e; };     // e = NaN while the target is untracked
+
+  float errWindow = 60.0f;
+  std::map<uint32_t, std::deque<ErrSample>> errHist;
+
   bool showGrid = true, showFov = true, showTruth = true, showMeas = true, showTracks = true,
        showTentative = false, showCov = true, showTrails = true, debugClutter = false;
   float measLife = 3.0f;
@@ -82,7 +91,7 @@ struct App {
 
   void reset() {
     sim = makeScenario((uint64_t)seed);
-    truthTrail.clear(); trackTrail.clear(); blips.clear();
+    truthTrail.clear(); trackTrail.clear(); blips.clear(); errHist.clear();
     acc = 0;
   }
 
@@ -113,6 +122,21 @@ struct App {
     } 
 
     while (!blips.empty() && s.time - blips.front().t > 10.0) blips.pop_front();
+
+    // Position error per target: distance to the nearest confirmed track (NaN if none within the gate)
+    for (auto& [id, st] : s.truth) {
+      double best = kAssocGate;
+      bool found = false;
+      for (auto& tr : s.tracks) {
+        if (!tr.confirmed) continue;
+        const double d = (tr.x.head<3>() - st.pos).norm();
+        if (d < best) { best = d; found = true; }
+      }
+      errHist[id].push_back({s.time, found ? best : std::nan("")});
+    }
+    for (auto& [id, q] : errHist)
+      while (!q.empty() && s.time - q.front().t > kErrHistory) q.pop_front();
+    std::erase_if(errHist, [](auto& kv) { return kv.second.empty(); });
   }
 
   void fitView() {
@@ -195,6 +219,7 @@ static void drawScene(App& app) {
   // Sensors + top-down FOV sectors
   for (auto& s : app.sim.sensors()) {
     const SensorConfig& c = s.config();
+    if (!c.enabled) continue;
     const ImU32 col = kSensorCol[c.id % 4];
     if (app.showFov) {
       const auto poly = vp.fovSector(c.pose.position, sensorYaw(c), c.fov_half_angle, c.max_range);
@@ -313,26 +338,49 @@ static void drawControls(App& app) {
       if (!ImGui::TreeNodeEx(label, ImGuiTreeNodeFlags_DefaultOpen)) continue;
       ImGui::PushID((int)c.id);
 
-      float sg[3] = {(float)c.sigma.x(), (float)c.sigma.y(), (float)c.sigma.z()};
-      if (ImGui::SliderFloat3("noise sigma xyz (m)", sg, 0.01f, 150.0f, "%.2f", ImGuiSliderFlags_Logarithmic))
-        c.sigma = Vec3(sg[0], sg[1], sg[2]);
+      ImGui::Checkbox("enabled", &c.enabled);
+      ImGui::BeginDisabled(!c.enabled);   // grey out this sensor's sliders while it's off
+      float sg[3] = {(float)c.sigma.x(), (float)c.sigma.y()*f_rad2deg, (float)c.sigma.z()*f_rad2deg};
+      bool changed = false;
+      changed |= ImGui::SliderFloat("sigma range (m)", &sg[0], 0.1f,   500.0f, "%.2f", ImGuiSliderFlags_Logarithmic);
+      changed |= ImGui::SliderFloat("sigma angle (deg)", &sg[1], 0.01f, 60.0f, "%.3f", ImGuiSliderFlags_Logarithmic);
+      changed |= ImGui::SliderFloat("sigma elevation (deg)", &sg[2], 0.01f, 60.0f, "%.3f", ImGuiSliderFlags_Logarithmic);
+      if (changed) c.sigma = Vec3(sg[0], sg[1]*f_deg2rad, sg[2]*f_deg2rad);
       float pd = (float)c.p_detect;
       if (ImGui::SliderFloat("P(detect)", &pd, 0.0f, 1.0f)) c.p_detect = pd;
       float cl = (float)c.clutter_rate;
-      if (ImGui::SliderFloat("clutter / scan", &cl, 0.0f, 40.0f)) c.clutter_rate = cl;
+      if (ImGui::SliderFloat("clutter / scan", &cl, 0.0f, 20.0f)) c.clutter_rate = cl;
       float rate = (float)c.update_rate_hz;
-      if (ImGui::SliderFloat("update rate (Hz)", &rate, 0.2f, 10.0f)) c.update_rate_hz = rate;
+      if (ImGui::SliderFloat("update rate (Hz)", &rate, 0.2f, 50.0f)) c.update_rate_hz = rate;
       float fov = (float)(c.fov_half_angle * 180.0 / M_PI);
-      if (ImGui::SliderFloat("FOV half-angle (deg)", &fov, 5.0f, 90.0f)) c.fov_half_angle = fov * M_PI / 180.0;
+      if (ImGui::SliderFloat("FOV half-angle (deg)", &fov, 5.0f, 180.0f)) c.fov_half_angle = fov * M_PI / 180.0;
       float rng = (float)c.max_range;
-      if (ImGui::SliderFloat("max range (m)", &rng, 500.0f, 15000.0f)) c.max_range = rng;
+      if (ImGui::SliderFloat("max range (m)", &rng, 100.0f, 10000.0f)) c.max_range = rng;
       float yaw = (float)(sensorYaw(c) * 180.0 / M_PI);
       if (ImGui::SliderFloat("heading (deg)", &yaw, -180.0f, 180.0f))
         c.pose.orientation = Eigen::Quaterniond(Eigen::AngleAxisd(yaw * M_PI / 180.0, Vec3::UnitZ()));
 
+      ImGui::EndDisabled();
       ImGui::PopID();
       ImGui::TreePop();
     }
+  }
+
+  if (ImGui::CollapsingHeader("Tracker", ImGuiTreeNodeFlags_DefaultOpen)) {
+    // Edits go straight into the sim-owned params, which the tracker reads by reference.
+    TrackerParams& p = app.sim.trackerParams();
+    constexpr ImGuiSliderFlags kLog = ImGuiSliderFlags_Logarithmic;
+    auto sliderD = [](const char* label, double* v, double lo, double hi, const char* fmt, ImGuiSliderFlags fl = 0) {
+      return ImGui::SliderScalar(label, ImGuiDataType_Double, v, &lo, &hi, fmt, fl);
+    };
+    sliderD("process noise q_accel", &p.q_accel, 0.1, 1000.0, "%.2f", kLog);
+    sliderD("gate chi2 (3 dof)", &p.gate_chi2, 1.0, 20.0, "%.2f");
+    if (ImGui::IsItemHovered())
+      ImGui::SetTooltip("3 dof: 95%% = 7.81, 99%% = 11.34, 99.9%% = 16.27");
+    ImGui::SliderInt("confirm hits", &p.confirm_hits, 1, 30);
+    ImGui::SliderInt("delete misses", &p.delete_misses, 1, 200);
+    sliderD("init velocity sigma (m/s)", &p.init_vel_sigma, 1.0, 500.0, "%.1f", kLog);
+    if (ImGui::Button("Defaults")) p = TrackerParams{};
   }
   ImGui::PopItemWidth();
   ImGui::End();
@@ -372,6 +420,74 @@ static void drawTelemetry(App& app) {
     }
     ImGui::EndTable();
   }
+  ImGui::End();
+}
+
+static void drawErrorPlot(App& app) {
+  const ImGuiViewport* vw = ImGui::GetMainViewport();
+  ImGui::SetNextWindowPos(ImVec2(vw->WorkPos.x + 10, vw->WorkPos.y + vw->WorkSize.y - 230), ImGuiCond_FirstUseEver);
+  ImGui::SetNextWindowSize(ImVec2(vw->WorkSize.x - 20, 220), ImGuiCond_FirstUseEver);
+  ImGui::Begin("Position error");
+  ImGui::SetNextItemWidth(200);
+  ImGui::SliderFloat("window (s)", &app.errWindow, 10.0f, (float)app.kErrHistory, "%.0f");
+
+  const double t1 = app.sim.snapshot().time, t0 = t1 - app.errWindow;
+  double yMax = 10.0;  // auto-scale to the largest visible error, rounded up to 1/2/5 x 10^k
+  for (auto& [id, q] : app.errHist)
+    for (auto& s : q)
+      if (s.t >= t0 && !std::isnan(s.e)) yMax = std::max(yMax, s.e);
+  const double mag = std::pow(10.0, std::floor(std::log10(yMax)));
+  for (double m : {1.0, 2.0, 5.0, 10.0}) if (yMax <= m * mag) { yMax = m * mag; break; }
+
+  const ImVec2 p0 = ImGui::GetCursorScreenPos();
+  const ImVec2 avail = ImGui::GetContentRegionAvail();
+  const ImVec2 a(p0.x + 46, p0.y + 18), b(p0.x + avail.x - 8, p0.y + avail.y - 18);
+  if (b.x - a.x < 60 || b.y - a.y < 40) { ImGui::End(); return; }
+  ImGui::InvisibleButton("##errplot", avail);
+
+  ImDrawList* dl = ImGui::GetWindowDrawList();
+  dl->PushClipRect(p0, ImVec2(p0.x + avail.x, p0.y + avail.y), true);
+  dl->AddRectFilled(a, b, IM_COL32(20, 22, 28, 255));
+  char buf[48];
+  for (int i = 0; i <= 4; ++i) {  // horizontal grid + y labels
+    const float y = b.y - (b.y - a.y) * i / 4.0f;
+    dl->AddLine(ImVec2(a.x, y), ImVec2(b.x, y), IM_COL32(255, 255, 255, 35));
+    std::snprintf(buf, sizeof buf, "%.0f", yMax * i / 4.0);
+    dl->AddText(ImVec2(p0.x + 2, y - 7), IM_COL32(170, 170, 180, 255), buf);
+  }
+  for (int i = 0; i <= 4; ++i) {  // vertical grid + sim-time labels
+    const float x = a.x + (b.x - a.x) * i / 4.0f;
+    dl->AddLine(ImVec2(x, a.y), ImVec2(x, b.y), IM_COL32(255, 255, 255, 20));
+    std::snprintf(buf, sizeof buf, "%.0f s", t0 + app.errWindow * i / 4.0);
+    dl->AddText(ImVec2(x - 14, b.y + 3), IM_COL32(170, 170, 180, 255), buf);
+  }
+  dl->AddText(ImVec2(p0.x + 2, a.y - 16), IM_COL32(170, 170, 180, 255), "err (m)");
+
+  auto X = [&](double t) { return a.x + (float)((t - t0) / app.errWindow) * (b.x - a.x); };
+  auto Y = [&](double e) { return b.y - (float)(std::min(e, yMax) / yMax) * (b.y - a.y); };
+
+  float legendX = a.x + 60;
+  std::vector<ImVec2> seg;
+  for (auto& [id, q] : app.errHist) {
+    const ImU32 col = ImColor::HSV(std::fmod(id * 0.137f, 1.0f), 0.65f, 1.0f);
+    auto flush = [&] {
+      if (seg.size() >= 2) dl->AddPolyline(seg.data(), (int)seg.size(), col, ImDrawFlags_None, 1.5f);
+      else if (seg.size() == 1) dl->AddCircleFilled(seg[0], 2.0f, col);
+      seg.clear();
+    };
+    for (auto& s : q) {
+      if (s.t < t0) continue;
+      if (std::isnan(s.e)) { flush(); continue; }  // untracked: break the line
+      seg.push_back(ImVec2(X(s.t), Y(s.e)));
+    }
+    flush();
+
+    if (std::isnan(q.back().e)) std::snprintf(buf, sizeof buf, "T%u  untracked", id);
+    else std::snprintf(buf, sizeof buf, "T%u  %.1f m", id, q.back().e);
+    dl->AddText(ImVec2(legendX, p0.y + 2), col, buf);
+    legendX += ImGui::CalcTextSize(buf).x + 16;
+  }
+  dl->PopClipRect();
   ImGui::End();
 }
 
@@ -453,6 +569,7 @@ int main(int, char**) {
     drawScene(app);
     drawControls(app);
     drawTelemetry(app);
+    drawErrorPlot(app);
 
     ImGui::Render();
     glViewport(0, 0, (int)(io.DisplaySize.x * io.DisplayFramebufferScale.x),

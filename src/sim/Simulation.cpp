@@ -12,6 +12,7 @@ void Simulation::step() {
   std::vector<Measurement> all;
   for (auto& s : sensors_) {
     if (!s.due(t_)) continue;
+    if (!s.config().enabled) continue;
     auto m = s.observe(t_, targets_, rng_);
     all.insert(all.end(), m.begin(), m.end());
     s.markScanned();

@@ -5,6 +5,7 @@
 #include "core/Sensor.hpp"
 #include "sim/Snapshot.hpp"
 #include "tracking/IFusion.hpp"
+#include "tracking/TrackerParams.hpp"
 
 namespace sfsim {
 
@@ -28,6 +29,8 @@ class Simulation {
 
   // GUI-tweakable at runtime (sliders write here)
   std::vector<Sensor>& sensors() { return sensors_; }
+  // The tracker reads these by reference, so edits take effect on the next step.
+  TrackerParams& trackerParams() { return *trackerParams_; }
 
  private:
   SimConfig cfg_;
@@ -35,6 +38,9 @@ class Simulation {
   double t_ = 0;
   std::vector<Target> targets_;
   std::vector<Sensor> sensors_;
+  // Heap-allocated so its address survives moving the Simulation (the tracker holds a reference).
+  // Declared before fusion_ so it outlives the tracker on destruction.
+  std::unique_ptr<TrackerParams> trackerParams_ = std::make_unique<TrackerParams>();
   std::unique_ptr<IFusion> fusion_;
   Snapshot snap_;
 };

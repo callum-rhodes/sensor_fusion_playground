@@ -25,7 +25,7 @@ int main() {
   b.model = std::make_unique<CoordinatedTurn>(0.05);
   sim.addTarget(std::move(a));
   sim.addTarget(std::move(b));
-  sim.setFusion(std::make_unique<CentralizedTracker>());
+  sim.setFusion(std::make_unique<CentralizedTracker>(sim.trackerParams()));
 
   for (int k = 0; k < 300; ++k) {
     sim.step();

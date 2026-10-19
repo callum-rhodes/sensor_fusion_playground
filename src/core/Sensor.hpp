@@ -9,15 +9,16 @@ namespace sfsim {
 
 struct SensorConfig {
   SensorId id = 0;
+  bool enabled = true;
   MeasType measType = MeasType::Cartesian;
   Pose pose;
   double fov_half_angle = 0.5;   // rad, cone half-angle
-  double min_range = 1.0, max_range = 5000.0;
-  double update_rate_hz = 1.0;
+  double min_range = 1.0, max_range = 10000.0;
+  double update_rate_hz = 5.0;
   Vec3 sigma = Vec3::Constant(5.0);   // per-axis noise: metres for Cartesian, (m, rad, rad) for RangeAzEl
   Vec3 bias = Vec3::Zero();
   double p_detect = 0.9;
-  double clutter_rate = 2.0;     // expected false alarms per scan
+  double clutter_rate = 5.0;     // expected false alarms per scan
 };
 
 class Sensor {
