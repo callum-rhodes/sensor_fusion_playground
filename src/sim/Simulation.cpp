@@ -27,6 +27,8 @@ void Simulation::step() {
   for (const auto& tg : targets_) if (tg.alive(t_)) snap_.truth.emplace_back(tg.id, tg.state);
   snap_.measurements = std::move(all);
   snap_.tracks = fusion_ ? fusion_->tracks() : std::vector<Track>{};
+
+  tracker_rate_.tick();
 }
 
 }  // namespace sfsim

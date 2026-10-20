@@ -39,7 +39,7 @@ static double sensorYaw(const SensorConfig& c) {
 }
 
 static Simulation makeScenario(uint64_t seed) {
-  Simulation sim({.dt = 0.1, .seed = seed});
+  Simulation sim({.dt = 0.02, .seed = seed});
 
   auto addSensor = [&](SensorId id, MeasType type, Vec3 pos, double yaw, double rate) {
     SensorConfig sc;
@@ -284,14 +284,21 @@ static void drawScene(App& app) {
     }
   }
 
-  // FPS counter, bottom-right corner of the main view
+  // FPS / tracker rate counter, bottom-right corner of the main view
   {
     const ImGuiIO& io = ImGui::GetIO();
-    char fps[48];
-    std::snprintf(fps, sizeof fps, "%.0f FPS  (%.1f ms)", io.Framerate, 1000.0f / io.Framerate);
-    const ImVec2 sz = ImGui::CalcTextSize(fps);
-    dl->AddText(ImVec2((float)vp.screen.x - sz.x - 10.0f, (float)vp.screen.y - sz.y - 8.0f),
-                IM_COL32(255, 255, 255, 140), fps);
+    char lines[2][64];
+    std::snprintf(lines[0], sizeof lines[0], "tracker %.0f Hz", app.sim.trackerRateHz());
+    std::snprintf(lines[1], sizeof lines[1], "%.0f FPS  (%.1f ms)", io.Framerate, 1000.0f / io.Framerate);
+
+    const float line_h = ImGui::GetTextLineHeightWithSpacing();
+    float y = (float)vp.screen.y - 8.0f - line_h * 2.0f;
+    for (auto& s : lines) {
+      const ImVec2 sz = ImGui::CalcTextSize(s);
+      dl->AddText(ImVec2((float)vp.screen.x - sz.x - 10.0f, y),
+                  IM_COL32(255, 255, 255, 140), s);
+      y += line_h;
+    }
   }
 }
 
@@ -561,7 +568,7 @@ int main(int, char**) {
     if (app.running) {
       app.acc += std::min((double)io.DeltaTime, 0.1) * app.speed;
       int n = 0;
-      const double dt = 0.1;  // matches SimConfig.dt in makeScenario
+      const double dt = app.sim.cfg_.dt;  // matches SimConfig.dt in makeScenario
       while (app.acc >= dt && n < 100) { app.stepOnce(); app.acc -= dt; ++n; }
       if (n == 100) app.acc = 0;
     }

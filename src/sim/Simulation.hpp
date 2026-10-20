@@ -3,6 +3,7 @@
 #include <random>
 #include <vector>
 #include "core/Sensor.hpp"
+#include "core/RateCounter.hpp"
 #include "sim/Snapshot.hpp"
 #include "tracking/IFusion.hpp"
 #include "tracking/TrackerParams.hpp"
@@ -32,12 +33,18 @@ class Simulation {
   // The tracker reads these by reference, so edits take effect on the next step.
   TrackerParams& trackerParams() { return *trackerParams_; }
 
- private:
+  // Simulation.hpp
+
+  double trackerRateHz() const { return tracker_rate_.hz(); }
+
   SimConfig cfg_;
+
+ private:
   std::mt19937_64 rng_;
   double t_ = 0;
   std::vector<Target> targets_;
   std::vector<Sensor> sensors_;
+  RateCounter tracker_rate_;
   // Heap-allocated so its address survives moving the Simulation (the tracker holds a reference).
   // Declared before fusion_ so it outlives the tracker on destruction.
   std::unique_ptr<TrackerParams> trackerParams_ = std::make_unique<TrackerParams>();
