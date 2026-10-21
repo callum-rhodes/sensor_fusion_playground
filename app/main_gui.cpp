@@ -384,8 +384,9 @@ static void drawControls(App& app) {
     sliderD("gate chi2 (3 dof)", &p.gate_chi2, 1.0, 20.0, "%.2f");
     if (ImGui::IsItemHovered())
       ImGui::SetTooltip("3 dof: 95%% = 7.81, 99%% = 11.34, 99.9%% = 16.27");
-    ImGui::SliderInt("confirm hits", &p.confirm_hits, 1, 30);
+    ImGui::SliderInt("confirm hits", &p.confirm_hits, 1, 200);
     ImGui::SliderInt("delete misses", &p.delete_misses, 1, 200);
+    ImGui::SliderInt("delete misses (tentative)", &p.delete_misses_tentative, 1, 200);
     sliderD("init velocity sigma (m/s)", &p.init_vel_sigma, 1.0, 500.0, "%.1f", kLog);
     if (ImGui::Button("Defaults")) p = TrackerParams{};
   }

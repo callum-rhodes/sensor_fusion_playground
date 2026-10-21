@@ -48,7 +48,11 @@ void CentralizedTracker::step(double t, const std::vector<Sensor>& sensors, cons
   for (size_t i = 0; i < pool_.size(); ++i)
     if (usedSensors[i] == 0) pool_[i].meta.misses++;
 
-  std::erase_if(pool_, [&](const Internal& tr) { return tr.meta.misses >= p_.delete_misses; });
+  std::erase_if(pool_, [&](const Internal& tr) {
+      return tr.meta.confirmed
+          ? tr.meta.misses >= p_.delete_misses
+          : tr.meta.misses >= p_.delete_misses_tentative;
+  });
 
   // Duplicate pruning: two tracks at (nearly) the same place with the same velocity are one target
   std::vector<bool> drop(pool_.size(), false);

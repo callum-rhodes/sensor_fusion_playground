@@ -72,3 +72,7 @@ Testing/
 .vscode/
 docs/html
 docs/latex
+
+# Profiler output files
+*.gmon
+analysis.txt

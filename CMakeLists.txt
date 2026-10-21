@@ -5,6 +5,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE Release)
 endif()
+# Add "Profile" to the list of known configurations for IDEs
+set(CMAKE_CONFIGURATION_TYPES "Debug;Release;MinSizeRel;RelWithDebInfo;Profile" CACHE STRING "" FORCE)
 
 include(FetchContent)
 
@@ -66,4 +68,23 @@ if(SFSIM_GUI)
   if(TARGET SDL2::SDL2main)
     target_link_libraries(sfsim_gui PRIVATE SDL2::SDL2main)
   endif()
+endif()
+
+# ================= Profiling support =====================
+# Start with the core headless targets that always exist
+set(ALL_TARGETS sfsim_core sfsim_headless)
+
+# Only add the GUI target to the list if the option is enabled
+if(SFSIM_GUI)
+    list(APPEND ALL_TARGETS sfsim_gui)
+endif()
+
+foreach(pkg_target sfsim_core sfsim_headless)
+    target_compile_options(${pkg_target} PRIVATE $<$<CONFIG:Profile>:-O2 -g -pg>)
+    target_link_options(${pkg_target} PRIVATE $<$<CONFIG:Profile>:-pg>)
+endforeach()
+
+if(SFSIM_GUI)
+    target_compile_options(sfsim_gui PRIVATE $<$<CONFIG:Profile>:-O2 -g -pg>)
+    target_link_options(sfsim_gui PRIVATE $<$<CONFIG:Profile>:-pg>)
 endif()
